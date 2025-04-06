@@ -6,9 +6,9 @@
 ## TitleS: AWR
 ## TitleS-ruRU: AWR
 
-## Version: 1.0.0 (6.4.25 12:00 MSK)
+## Version: 1.0.1 (7.4.25 1:00 MSK)
 
-## Notes: Codework by some random guy. GitHub/YouTube/Discord/Telegram: @mrcatsoul, |cFFC41F3BTombstalker-x5|r/|cFFC41F3BMori-x100|r/|cFFC41F3BMoriarty-x5|r~WoWCircle WotLK
+## Notes: Codework by some random guy. GitHub/YouTube/Discord/Telegram: @mrcatsoul, |cFFC41F3BTombstalker(x5)|r/|cFFC41F3BMori(x100)|r/|cFFC41F3BMoriarty(x5)|r~WoWCircle WotLK
 
 ## Notes-ruRU: Чат-фильтр для отображения входящих пм только от друзей/гильдии с функцией автоответа тем, кто не в друзьях/гильдии + опция для постоянного авто-днд. Работа над кодом: Рандом из лфг. GitHub/YouTube/Discord/Telegram: @mrcatsoul; |cFFC41F3BTombstalker-x5|r/|cFFC41F3BMori-x100|r/|cFFC41F3BMoriarty-x5|r~WoWCircle WotLK
 
