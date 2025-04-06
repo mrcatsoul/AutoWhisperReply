@@ -123,7 +123,7 @@ local function chatFilter(self, event, msg, name, ...)
   or (event=="CHAT_MSG_WHISPER" and ( (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name]) or (cfg.enable_accept_pm_from_friends_only and friendsNames[name]) or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name]) ) )
   or (event=="CHAT_MSG_WHISPER" and not cfg.enable_accept_pm_we_recently_whisper_send and not cfg.enable_accept_pm_from_friends_only and not cfg.enable_accept_pm_from_guild_members)
   if not isGoodMsg then
-    if and event=="CHAT_MSG_WHISPER" and cfg.enable_blocked_msg_notification then
+    if event=="CHAT_MSG_WHISPER" and cfg.enable_blocked_msg_notification then
       _print("Входящее сообщение от ["..name.."] было заблокировано для показа")
     end
     if event=="CHAT_MSG_WHISPER" then
