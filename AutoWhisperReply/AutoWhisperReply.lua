@@ -24,9 +24,11 @@ local GetGuildRosterInfo = GetGuildRosterInfo
 local GetFriendInfo = GetFriendInfo
 local GetNumGuildMembers = GetNumGuildMembers
 local GetTime = GetTime
+local ShowFriends = ShowFriends
 --print(STRING_SCHOOL_UNKNOWN)
 
 local function _print(msg,msg2,msg3,frame)
+  if not cfg.enable_chat_print then return end
   if frame then
     frame:AddMessage("|cff3399ff["..ADDON_NAME_LOCALE_SHORT.."]|r: "..msg, msg2 and msg2 or "", msg3 and msg3 or "")
   else
@@ -44,24 +46,31 @@ f:SetScript("OnEvent", function(self, event, ...) self[event](self, ...) end)
 
 function f:CHAT_MSG_WHISPER(...)
   local msg, name = ...
-  if not cfg.enable_addon or not cfg.enable_auto_reply or not name or name == "" or name == STRING_SCHOOL_UNKNOWN then return end
-  if not friendsNames[name] then
-    if messageCD[name] and messageCD[name] < GetTime() then
+  if not cfg.enable_addon or not cfg.enable_auto_reply or not name or name == "" or name == STRING_SCHOOL_UNKNOWN or name == playerName then return end
+  local noReply = (cfg.enable_accept_pm_from_friends_only and friendsNames[name]) 
+                  or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name])
+                  or (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name])
+                  or not (cfg.enable_accept_pm_from_friends_only or cfg.enable_accept_pm_from_guild_members or cfg.enable_accept_pm_we_recently_whisper_send)
+  local shouldReply = not noReply
+  print("shouldReply",shouldReply)
+  if shouldReply then
+    local t = GetTime()
+    if messageCD[name] and messageCD[name] < t then
       messageCD[name] = nil
     end
-    if not messageCD[name] and not (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name]) then
-      messageCD[name] = GetTime() + cfg.auto_reply_cooldown
+    if not messageCD[name] then
+      messageCD[name] = t + cfg.auto_reply_cooldown
       --print(cfg.auto_reply_message,name)
-      SendChatMessage(cfg.auto_reply_message,"WHISPER",nil,name)
+      SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName),"WHISPER",nil,name)
     end
   end
 end
 
 function f:CHAT_MSG_WHISPER_INFORM(...)
   local msg, name = ...
-  if not cfg.enable_addon or not name or name == "" or name == STRING_SCHOOL_UNKNOWN then return end
-  if cfg.enable_accept_pm_we_recently_whisper_send and msg ~= cfg.auto_reply_message then
-    --print("recentlySendPMNames",name)
+  if not cfg.enable_addon or not name or name == "" or name == STRING_SCHOOL_UNKNOWN or msg == cfg.auto_reply_message:gsub("#playerName",playerName) then return end
+  if cfg.enable_accept_pm_we_recently_whisper_send and not recentlySendPMNames[name] and not ( (cfg.enable_accept_pm_from_friends_only and friendsNames[name]) or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name]) ) then
+    _print(name, "временно добавлен в белый список для общения")
     recentlySendPMNames[name] = true
   end
   if cfg.auto_disable_dnd_on_whisper_sent and UnitIsDND("player") then
@@ -73,11 +82,13 @@ function f:CHAT_MSG_WHISPER_INFORM(...)
 end
 
 function f:PLAYER_ENTERING_WORLD(...)
+  f:onFirstLaunch()
   playerName = UnitName("player")
+  ShowFriends()
   if not cfg.enable_addon then return end
   if cfg.enable_auto_dnd and not UnitIsDND("player") and (cfg.enable_turn_on_auto_dnd_on_zone_change_after_whisper_sent or not cfg.auto_disable_dnd_on_whisper_sent) then
-    SendChatMessage(cfg.auto_reply_message, "DND")
-    _print("Режим авто-|cffff0000DND|r включен, автоответ для фанатов: "..cfg.auto_reply_message.."")
+    SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName), "DND")
+    _print("Режим авто-|cffff0000DND|r включен, автоответ для фанатов: "..cfg.auto_reply_message:gsub("#playerName",playerName).."")
   end
 end
 
@@ -99,24 +110,35 @@ function f:FRIENDLIST_UPDATE()
     local name = GetFriendInfo(i)
     if name and name~="" and name~=STRING_SCHOOL_UNKNOWN then 
       friendsNames[name] = true
+      print(name)
     end
   end
 end
 
+local MARKED_DND = MARKED_DND
+
 local function chatFilter(self, event, msg, name, ...)
+  print((cfg.enable_accept_pm_from_friends_only and friendsNames[name]))
   if not (msg and name) then return end
-  local isGoodMsg = not cfg.enable_addon or (name==playerName and msg~=cfg.auto_reply_message) or (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name]) or (cfg.enable_accept_pm_from_friends_only and friendsNames[name]) or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name])
+  local isGoodMsg = not cfg.enable_addon
+  or (event=="CHAT_MSG_SYSTEM" --[[and cfg.enable_auto_dnd]] and not msg:find(cfg.auto_reply_message:gsub("#playerName",playerName)) --[[not msg:match(MARKED_DND:gsub("%%s", "(.+)"))]])
+  or (event=="CHAT_MSG_WHISPER_INFORM" and msg~=cfg.auto_reply_message:gsub("#playerName",playerName))
+  or (event=="CHAT_MSG_WHISPER" and ( (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name]) or (cfg.enable_accept_pm_from_friends_only and friendsNames[name]) or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name]) ) )
+  or (event=="CHAT_MSG_WHISPER" and not cfg.enable_accept_pm_we_recently_whisper_send and not cfg.enable_accept_pm_from_friends_only and not cfg.enable_accept_pm_from_guild_members)
   if not isGoodMsg then
     if cfg.enable_blocked_msg_notification then
       _print("Входящее сообщение от ["..name.."] было заблокировано для показа")
     end
-    ---print("not isGoodMsg")
+    if event=="CHAT_MSG_WHISPER" then
+      print("not isGoodMsg")
+    end
     return true
   end
 end
 
 ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", chatFilter)
 ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER_INFORM", chatFilter)
+ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", chatFilter)
 
 -- чат линк
 local function ChatLink(text,option,colorHex,chatTarget)
@@ -153,16 +175,17 @@ end
 local options =
 {
   {"enable_addon","Включить аддон",nil,true},
-  {"enable_accept_pm_from_friends_only","Разрешить входящие пм только от друзей",nil,false},
-  {"enable_accept_pm_from_guild_members","Также разрешить входящие пм от согильдейцев",nil,false},
-  {"enable_accept_pm_we_recently_whisper_send","Также разрешить входящие пм от тех, кому мы сами недавно писали в пм (до релоада/релога)",nil,false},
-  {"enable_auto_reply","Включить автоответ на входящие пм тем, кому не выдано разрешение опциями выше",nil,true},
-  {"auto_reply_message","Сообщение автоответ. Ввод пустой строки выставит сообщение по умолчанию",nil,""..playerName.." не может сейчас ответить т.к афк. Попробуй написать позже."},
+  {"enable_accept_pm_from_friends_only","Принимать входящие пм от друзей",nil,false},
+  {"enable_accept_pm_from_guild_members","Принимать входящие пм от согильдейцев",nil,false},
+  {"enable_accept_pm_we_recently_whisper_send","Принимать входящие пм от тех, кому мы сами недавно писали в пм (разрешение работает до следующего релога)",nil,false},
+  {"enable_auto_reply","Включить автоответ в пм тем, чьи входящие мы не принимаем (должен быть включен хотя бы один пункт выше)",nil,true},
+  {"auto_reply_message","Сообщение автоответ. Ввод пустой строки выставит сообщение по умолчанию",nil,"#playerName не может сейчас ответить т.к афк. Попробуй написать позже."},
   {"auto_reply_cooldown","Отправлять автоответ не чаще чем раз в N сек",nil,10,1,100000},
-  {"enable_blocked_msg_notification","Отображать уведомление о заблокированном сообщении",nil,false},
+  {"enable_blocked_msg_notification","Отображать уведомление о заблокированном сообщении (возможны дубликаты, WIP/в процессе доработки)",nil,false},
   {"enable_auto_dnd","Держать режим |cffff0000DND(не беспокоить)|r включенным всегда",nil,false},
   {"auto_disable_dnd_on_whisper_sent","Выключать режим |cffff0000DND|r если отправляем сообщение кому-то в пм (чтобы нам могли ответить)",nil,true},
-  {"enable_turn_on_auto_dnd_on_zone_change_after_whisper_sent","Снова включать режим |cffff0000DND|r при смене зоны если он был |cffff0000ВЫКЛЮЧЕН|r при отправке сообщения в пм опцией выше, но до этого был |cff00ff00ВКЛЮЧЕН|r",nil,true},
+  {"enable_turn_on_auto_dnd_on_zone_change_after_whisper_sent","Снова включать |cffff0000DND|r при смене зоны если он был |cffff0000ВЫКЛЮЧЕН|r при отправке сообщения кому-либо в пм(опцией выше), и до этого DND был |cff00ff00ВКЛЮЧЕН|r",nil,true},
+  {"enable_chat_print","Сообщения от аддона в чат (лог работы)",nil,true},
 }
 
 --------------------------------------------------------------------------------
@@ -197,7 +220,7 @@ function cfgFrame:ADDON_LOADED(addon)
     cfgFrame:InitConfig()
     cfgFrame:UpdateVisual()
     cfgFrame:CreateOptions()
-    _print("Аддон загружен. Настройки:|r "..ChatLink("Линк","Settings").." либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
+    _print("Аддон загружен. Настройки:|r "..ChatLink("Линк","Settings")..", либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
   end
 end
 
@@ -271,7 +294,7 @@ function cfgFrame:UpdateVisual()
     end
   elseif cfg.enable_auto_dnd then
     if not UnitIsDND("player") then
-      SendChatMessage(cfg.auto_reply_message, "DND")
+      SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName), "DND")
     end
   end
   cfgFrame:Hide()
@@ -288,7 +311,7 @@ function cfgFrame:InitConfig()
   for _,v in ipairs(options) do
     if cfg[v[1]]==nil then
       cfg[v[1]]=v[4]
-      _print(""..v[1]..": "..tostring(cfg[v[1]]).." (задан параметр по умолчанию)")
+      --_print(""..v[1]..": "..tostring(cfg[v[1]]).." (задан параметр по умолчанию)")
     end
   end
 
@@ -296,16 +319,7 @@ function cfgFrame:InitConfig()
     mrcatsoul_AutoWhisperReply = cfg
     cfg = mrcatsoul_AutoWhisperReply
     _print("Инициализация конфига")
-    local t = GetTime()+4
-    CreateFrame("frame"):SetScript("OnUpdate", function(self)
-      if t<GetTime() then
-        PlaySound("RaidWarning")
-        RaidNotice_AddMessage(RaidWarningFrame, "|cff33ccff["..ADDON_NAME.."]:|r |cffffffff"..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r", ChatTypeInfo["RAID_WARNING"])
-        _print("|cff33ccff["..ADDON_NAME.."]:|r "..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации либо "..ChatLink("Тык","Settings").." либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
-        self:SetScript("OnUpdate", nil)
-        self=nil
-      end
-    end)
+    cfgFrame.isFirstLaunch = true
   end
 end
 
@@ -532,12 +546,30 @@ function cfgFrame:createEditBox(settingName,checkboxText,tooltipText,defValue,mi
   end
 end
 
+function f:onFirstLaunch()
+  if not cfgFrame.isFirstLaunch then return end
+  cfgFrame.isFirstLaunch = nil
+  local t = GetTime()+4
+  CreateFrame("frame"):SetScript("OnUpdate", function(self)
+    if t < GetTime() then
+      RaidNotice_AddMessage(RaidWarningFrame, "|cff33ccff["..ADDON_NAME.."]:|r |cffffffff"..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации, либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r", ChatTypeInfo["RAID_WARNING"])
+      _print("|cff33ccff["..ADDON_NAME.."]:|r "..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации, либо "..ChatLink("Тык","Settings")..", либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
+      --if RaidWarningFrame:IsShown() then
+      --  PlaySound("RaidWarning")
+      --end
+      PlaySoundFile("interface\\addons\\"..ADDON_NAME.."\\swagga.mp3")
+      self:SetScript("OnUpdate", nil)
+      self=nil
+    end
+  end)
+end
+
 SlashCmdList[ADDON_NAME] = function(msg)
   if msg and msg~="" and msg~=cfg.auto_reply_message then
     cfg.auto_reply_message = msg
     --_print("auto_reply_message:", cfg.auto_reply_message)
-    SendChatMessage(cfg.auto_reply_message, "DND")
-    _print("Режим авто-|cffff0000DND|r включен, автоответ для фанатов: "..cfg.auto_reply_message.."")
+    SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName), "DND")
+    _print("Режим авто-|cffff0000DND|r включен, автоответ для фанатов: "..cfg.auto_reply_message:gsub("#playerName",playerName).."")
   else
     InterfaceOptionsFrame_OpenToCategory(f.cfgScrollFrame)
     if not f.cfgFrame:IsShown() then
