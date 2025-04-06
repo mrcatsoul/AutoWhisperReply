@@ -23,7 +23,6 @@ local GetFriendInfo = GetFriendInfo
 local GetNumGuildMembers = GetNumGuildMembers
 local GetTime = GetTime
 local ShowFriends = ShowFriends
---print(STRING_SCHOOL_UNKNOWN)
 
 local function _print(msg,msg2,msg3,frame)
   if not cfg.enable_chat_print then return end
@@ -50,7 +49,7 @@ function f:CHAT_MSG_WHISPER(...)
                   or (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name])
                   or not (cfg.enable_accept_pm_from_friends_only or cfg.enable_accept_pm_from_guild_members or cfg.enable_accept_pm_we_recently_whisper_send)
   local shouldReply = not noReply
-  print("shouldReply",shouldReply)
+  --print("shouldReply",shouldReply)
   if shouldReply then
     local t = GetTime()
     if messageCD[name] and messageCD[name] < t then
@@ -108,7 +107,7 @@ function f:FRIENDLIST_UPDATE()
     local name = GetFriendInfo(i)
     if name and name~="" and name~=STRING_SCHOOL_UNKNOWN then 
       friendsNames[name] = true
-      print(name)
+      --print(name)
     end
   end
 end
@@ -116,7 +115,7 @@ end
 local MARKED_DND = MARKED_DND
 
 local function chatFilter(self, event, msg, name, ...)
-  print((cfg.enable_accept_pm_from_friends_only and friendsNames[name]))
+  --print((cfg.enable_accept_pm_from_friends_only and friendsNames[name]))
   if not (msg and name) then return end
   local isGoodMsg = not cfg.enable_addon
   or (event=="CHAT_MSG_SYSTEM" --[[and cfg.enable_auto_dnd]] and not msg:find(cfg.auto_reply_message:gsub("#playerName",playerName)) --[[not msg:match(MARKED_DND:gsub("%%s", "(.+)"))]])
@@ -124,11 +123,11 @@ local function chatFilter(self, event, msg, name, ...)
   or (event=="CHAT_MSG_WHISPER" and ( (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name]) or (cfg.enable_accept_pm_from_friends_only and friendsNames[name]) or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name]) ) )
   or (event=="CHAT_MSG_WHISPER" and not cfg.enable_accept_pm_we_recently_whisper_send and not cfg.enable_accept_pm_from_friends_only and not cfg.enable_accept_pm_from_guild_members)
   if not isGoodMsg then
-    if cfg.enable_blocked_msg_notification then
+    if and event=="CHAT_MSG_WHISPER" and cfg.enable_blocked_msg_notification then
       _print("Входящее сообщение от ["..name.."] было заблокировано для показа")
     end
     if event=="CHAT_MSG_WHISPER" then
-      print("not isGoodMsg")
+      --print("not isGoodMsg")
     end
     return true
   end
