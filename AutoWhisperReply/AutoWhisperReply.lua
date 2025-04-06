@@ -10,7 +10,7 @@ local ADDON_VERSION = GetAddOnMetadata(ADDON_NAME,"Version") or STRING_SCHOOL_UN
 
 local slashCmd = "/awr"
 
-local cfg, friendsNames, messageCD, recentlySendPMNames, guildMembersNames = {}, {}, {}, {}, {}
+local cfg, friendsNames, messageCD, recentlySendPMNames, guildMembersNames, notifiedMsgs = {}, {}, {}, {}, {}, {}
 local playerName = UnitName("player")
 
 local print = print
@@ -23,6 +23,7 @@ local GetFriendInfo = GetFriendInfo
 local GetNumGuildMembers = GetNumGuildMembers
 local GetTime = GetTime
 local ShowFriends = ShowFriends
+local GetPlayerInfoByGUID = GetPlayerInfoByGUID
 
 local function _print(msg,msg2,msg3,frame)
   if not cfg.enable_chat_print then return end
@@ -112,7 +113,43 @@ function f:FRIENDLIST_UPDATE()
   end
 end
 
-local MARKED_DND = MARKED_DND
+local classColors = {
+  ["DEATHKNIGHT"] = "C41F3B", -- 1
+  ["DRUID"] = "FF7D0A",       -- 2
+  ["HUNTER"] = "A9D271",      -- 3
+  ["MAGE"] = "40C7EB",        -- 4
+  ["PALADIN"] = "F58CBA",     -- 5
+  ["PRIEST"] = "FFFFFF",      -- 6
+  ["ROGUE"] = "FFF569",       -- 7
+  ["SHAMAN"] = "0070DE",      -- 8
+  ["WARLOCK"] = "8787ED",     -- 9
+  ["WARRIOR"] = "C79C6E",     -- 10
+  ["UNKNOWN"] = "999999",     -- 11
+}
+
+local function PlayerWhisperHyperLink(name,guid,class,addBrackets)
+  local link
+  
+  if (not class) and guid then
+    class = select(2,GetPlayerInfoByGUID(guid))
+  end
+
+  if name then
+    local classColor = class and RAID_CLASS_COLORS[class] and RAID_CLASS_COLORS[class].colorStr or "999999"
+  
+    if addBrackets then
+      link = "|Hplayer:"..name..":WHISPER:"..string.upper(name).."|h[|c"..classColor..""..name.."|r]|h"
+    else
+      link = "|Hplayer:"..name..":WHISPER:"..string.upper(name).."|h|c"..classColor..""..name.."|r|h"
+    end
+  else
+    link = addBrackets and "|cff999999[UNKNOWN]|r" or "|cff999999UNKNOWN|r"
+  end
+  
+  return link
+end
+
+--local MARKED_DND = MARKED_DND
 
 local function chatFilter(self, event, msg, name, ...)
   --print((cfg.enable_accept_pm_from_friends_only and friendsNames[name]))
@@ -122,13 +159,19 @@ local function chatFilter(self, event, msg, name, ...)
   or (event=="CHAT_MSG_WHISPER_INFORM" and msg~=cfg.auto_reply_message:gsub("#playerName",playerName))
   or (event=="CHAT_MSG_WHISPER" and ( (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name]) or (cfg.enable_accept_pm_from_friends_only and friendsNames[name]) or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name]) ) )
   or (event=="CHAT_MSG_WHISPER" and not cfg.enable_accept_pm_we_recently_whisper_send and not cfg.enable_accept_pm_from_friends_only and not cfg.enable_accept_pm_from_guild_members)
+  or ((event=="CHAT_MSG_WHISPER" or event=="CHAT_MSG_WHISPER_INFORM") and not cfg.enable_hide_blocked_messages)
   if not isGoodMsg then
     if event=="CHAT_MSG_WHISPER" and cfg.enable_blocked_msg_notification then
-      _print("Входящее сообщение от ["..name.."] было заблокировано для показа")
+      local msgId, senderGuid = select(9,...)
+      --print(GetPlayerInfoByGUID(senderGuid))
+      if not notifiedMsgs[msgId] then
+        notifiedMsgs[msgId] = true
+        _print("Входящее сообщение от "..PlayerWhisperHyperLink(name,senderGuid,nil,true).." было заблокировано для показа")
+      end
     end
-    if event=="CHAT_MSG_WHISPER" then
+    --if event=="CHAT_MSG_WHISPER" then
       --print("not isGoodMsg")
-    end
+    --end
     return true
   end
 end
@@ -172,17 +215,18 @@ end
 local options =
 {
   {"enable_addon","Включить аддон",nil,true},
-  {"enable_accept_pm_from_friends_only","Принимать входящие пм от друзей",nil,false},
-  {"enable_accept_pm_from_guild_members","Принимать входящие пм от согильдейцев",nil,false},
-  {"enable_accept_pm_we_recently_whisper_send","Принимать входящие пм от тех, кому мы сами недавно писали в пм (разрешение работает до следующего релога)",nil,false},
+  {"enable_accept_pm_from_friends_only","Принимать входящие только пм от друзей",nil,false},
+  {"enable_accept_pm_from_guild_members","Принимать входящие только пм от согильдейцев",nil,false},
+  {"enable_accept_pm_we_recently_whisper_send","Принимать входящие только пм от тех, кому мы сами недавно писали в пм (разрешение работает до следующего релога)",nil,false},
   {"enable_auto_reply","Включить автоответ в пм тем, чьи входящие мы не принимаем (должен быть включен хотя бы один пункт выше)",nil,true},
   {"auto_reply_message","Сообщение автоответ. Ввод пустой строки выставит сообщение по умолчанию",nil,"#playerName не может сейчас ответить т.к афк. Попробуй написать позже."},
   {"auto_reply_cooldown","Отправлять автоответ не чаще чем раз в N сек",nil,10,1,100000},
-  {"enable_blocked_msg_notification","Отображать уведомление о заблокированном сообщении (возможны дубликаты, WIP/в процессе доработки)",nil,false},
+  {"enable_hide_blocked_messages","Скрывать заблокированные сообщения",nil,true},
+  {"enable_blocked_msg_notification","Отображать уведомления о заблокированных сообщениях",nil,false},
   {"enable_auto_dnd","Держать режим |cffff0000DND(не беспокоить)|r включенным всегда",nil,false},
   {"auto_disable_dnd_on_whisper_sent","Выключать режим |cffff0000DND|r если отправляем сообщение кому-то в пм (чтобы нам могли ответить)",nil,true},
-  {"enable_turn_on_auto_dnd_on_zone_change_after_whisper_sent","Снова включать |cffff0000DND|r при смене зоны если он был |cffff0000ВЫКЛЮЧЕН|r при отправке сообщения кому-либо в пм(опцией выше), и до этого DND был |cff00ff00ВКЛЮЧЕН|r",nil,true},
-  {"enable_chat_print","Сообщения от аддона в чат (лог работы)",nil,true},
+  {"enable_turn_on_auto_dnd_on_zone_change_after_whisper_sent","Снова включать |cffff0000DND|r при смене зоны если тот был |cffff0000ВЫКЛЮЧЕН|r при отправке сообщения кому-либо в пм(опцией выше), и до этого DND был |cff00ff00ВКЛЮЧЕН|r",nil,true},
+  {"enable_chat_print","Инфо сообщения от аддона в чат (принты/лог работы)",nil,true},
 }
 
 --------------------------------------------------------------------------------
