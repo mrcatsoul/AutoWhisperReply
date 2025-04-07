@@ -113,37 +113,29 @@ function f:FRIENDLIST_UPDATE()
   end
 end
 
-local classColors = {
-  ["DEATHKNIGHT"] = "C41F3B", -- 1
-  ["DRUID"] = "FF7D0A",       -- 2
-  ["HUNTER"] = "A9D271",      -- 3
-  ["MAGE"] = "40C7EB",        -- 4
-  ["PALADIN"] = "F58CBA",     -- 5
-  ["PRIEST"] = "FFFFFF",      -- 6
-  ["ROGUE"] = "FFF569",       -- 7
-  ["SHAMAN"] = "0070DE",      -- 8
-  ["WARLOCK"] = "8787ED",     -- 9
-  ["WARRIOR"] = "C79C6E",     -- 10
-  ["UNKNOWN"] = "999999",     -- 11
-}
+local function rgbToHex(r, g, b)
+  return string.format("%02x%02x%02x", math.floor(255 * r), math.floor(255 * g), math.floor(255 * b))
+end
+
+local RAID_CLASS_COLORS = RAID_CLASS_COLORS
 
 local function PlayerWhisperHyperLink(name,guid,class,addBrackets)
-  local link
+  local link, colorStr 
   
   if (not class) and guid then
     class = select(2,GetPlayerInfoByGUID(guid))
   end
 
   if name then
-    local classColor = class and RAID_CLASS_COLORS[class] and RAID_CLASS_COLORS[class].colorStr or "999999"
-  
+    local colorStr = class and RAID_CLASS_COLORS[class] and rgbToHex(RAID_CLASS_COLORS[class].r, RAID_CLASS_COLORS[class].g, RAID_CLASS_COLORS[class].b) or "999999"
+    
     if addBrackets then
-      link = "|Hplayer:"..name..":WHISPER:"..string.upper(name).."|h[|c"..classColor..""..name.."|r]|h"
+      link = "|Hplayer:"..name..":WHISPER:"..string.upper(name).."|h[|cff"..colorStr..""..name.."|r]|h"
     else
-      link = "|Hplayer:"..name..":WHISPER:"..string.upper(name).."|h|c"..classColor..""..name.."|r|h"
+      link = "|Hplayer:"..name..":WHISPER:"..string.upper(name).."|h|cff"..colorStr..""..name.."|r|h"
     end
   else
-    link = addBrackets and "|cff999999[UNKNOWN]|r" or "|cff999999UNKNOWN|r"
+    link = addBrackets and "|cff999999["..STRING_SCHOOL_UNKNOWN:upper().."]|r" or "|cff999999"..STRING_SCHOOL_UNKNOWN:upper().."|r"
   end
   
   return link
@@ -154,19 +146,33 @@ end
 local function chatFilter(self, event, msg, name, ...)
   --print((cfg.enable_accept_pm_from_friends_only and friendsNames[name]))
   if not (msg and name) then return end
-  local isGoodMsg = not cfg.enable_addon
-  or (event=="CHAT_MSG_SYSTEM" --[[and cfg.enable_auto_dnd]] and not msg:find(cfg.auto_reply_message:gsub("#playerName",playerName)) --[[not msg:match(MARKED_DND:gsub("%%s", "(.+)"))]])
-  or (event=="CHAT_MSG_WHISPER_INFORM" and msg~=cfg.auto_reply_message:gsub("#playerName",playerName))
+  
+  -- отобразить сообщение в чате если оно подходит по следующим критериям: ...
+  local isGoodMsg = not cfg.enable_addon -- если аддон выключен;
+  
+  -- если это не системное (желтое) сообщение оповещающее нас о статусе включённого режима не беспокоить;
+  or (event=="CHAT_MSG_SYSTEM" --[[and cfg.enable_auto_dnd]] and not msg:find(cfg.auto_reply_message:gsub("#playerName",playerName)) --[[not msg:match(MARKED_DND:gsub("%%s", "(.+)"))]]) 
+  
+  -- если это исходящее пм сообщение, идентичное введенному в опции-строке "сообщение автоответ" + опция "скрывать автоответ" включена, либо это обычное исходящее сообщение
+  or (event=="CHAT_MSG_WHISPER_INFORM" and ((msg ~= ((cfg.auto_reply_message):gsub("#playerName",playerName)) and cfg.enable_hide_auto_reply) or not cfg.enable_hide_auto_reply))
+  
+  -- если это входящее пм + хотя бы одна из опций друзья/гильдия/временно разрешенные включена + автор сообщения в списке друзей/гильдии/временно разрешенных соответственно
   or (event=="CHAT_MSG_WHISPER" and ( (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name]) or (cfg.enable_accept_pm_from_friends_only and friendsNames[name]) or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name]) ) )
+  
+  -- если это входящее пм + все опции друзья/гильдия/временно разрешенные выключены
   or (event=="CHAT_MSG_WHISPER" and not cfg.enable_accept_pm_we_recently_whisper_send and not cfg.enable_accept_pm_from_friends_only and not cfg.enable_accept_pm_from_guild_members)
-  or ((event=="CHAT_MSG_WHISPER" or event=="CHAT_MSG_WHISPER_INFORM") and not cfg.enable_hide_blocked_messages)
+  
+  -- если это входящее пм + опция "Скрывать из чата заблокированные входящие пм" выключена
+  or (event=="CHAT_MSG_WHISPER" and not cfg.enable_hide_blocked_messages)
+  
+  -- если все критерии не удовлетворительные - сообщение фильтруется и не показывается в чате
   if not isGoodMsg then
-    if event=="CHAT_MSG_WHISPER" and cfg.enable_blocked_msg_notification then
+    if event=="CHAT_MSG_WHISPER" and cfg.enable_blocked_msg_notification then -- уведомление если это входящее пм и включена опция "Отображать уведомления"
       local msgId, senderGuid = select(9,...)
       --print(GetPlayerInfoByGUID(senderGuid))
       if not notifiedMsgs[msgId] then
         notifiedMsgs[msgId] = true
-        _print("Входящее сообщение от "..PlayerWhisperHyperLink(name,senderGuid,nil,true).." было заблокировано для показа")
+        _print("Сообщение в пм от "..PlayerWhisperHyperLink(name,senderGuid,nil,true).." было |cffff0000заблокировано|r. |r"..f:ChatLink("Настройки","Settings").."")
       end
     end
     --if event=="CHAT_MSG_WHISPER" then
@@ -181,7 +187,7 @@ ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER_INFORM", chatFilter)
 ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", chatFilter)
 
 -- чат линк
-local function ChatLink(text,option,colorHex,chatTarget)
+function f:ChatLink(text,option,colorHex,chatTarget)
   text = text or "ТЫК"
   option = option or ""
   chatTarget = chatTarget or ""
@@ -215,14 +221,15 @@ end
 local options =
 {
   {"enable_addon","Включить аддон",nil,true},
-  {"enable_accept_pm_from_friends_only","Принимать входящие только пм от друзей",nil,false},
-  {"enable_accept_pm_from_guild_members","Принимать входящие только пм от согильдейцев",nil,false},
-  {"enable_accept_pm_we_recently_whisper_send","Принимать входящие только пм от тех, кому мы сами недавно писали в пм (разрешение работает до следующего релога)",nil,false},
+  {"enable_accept_pm_from_friends_only","Принимать входящие пм только от друзей",nil,false},
+  {"enable_accept_pm_from_guild_members","Принимать входящие пм только от согильдейцев",nil,false},
+  {"enable_accept_pm_we_recently_whisper_send","Принимать входящие пм только от тех, кому мы сами недавно писали в пм (разрешение работает до следующего релога)",nil,false},
   {"enable_auto_reply","Включить автоответ в пм тем, чьи входящие мы не принимаем (должен быть включен хотя бы один пункт выше)",nil,true},
-  {"auto_reply_message","Сообщение автоответ. Ввод пустой строки выставит сообщение по умолчанию",nil,"#playerName не может сейчас ответить т.к афк. Попробуй написать позже."},
+  {"auto_reply_message","Сообщение автоответ. Ввод пустой строки выставит сообщение по умолчанию. |cff00ff00#playerName|r автоматически заменится на имя нашего персонажа",nil,"#playerName не может сейчас ответить т.к афк. Попробуй написать позже."},
   {"auto_reply_cooldown","Отправлять автоответ не чаще чем раз в N сек",nil,10,1,100000},
-  {"enable_hide_blocked_messages","Скрывать заблокированные сообщения",nil,true},
-  {"enable_blocked_msg_notification","Отображать уведомления о заблокированных сообщениях",nil,false},
+  {"enable_hide_auto_reply","Скрывать из чата наш автоответ в пм другим",nil,true},
+  {"enable_hide_blocked_messages","Скрывать из чата заблокированные входящие пм",nil,true},
+  {"enable_blocked_msg_notification","Отображать уведомления о заблокированных пм",nil,true},
   {"enable_auto_dnd","Держать режим |cffff0000DND(не беспокоить)|r включенным всегда",nil,false},
   {"auto_disable_dnd_on_whisper_sent","Выключать режим |cffff0000DND|r если отправляем сообщение кому-то в пм (чтобы нам могли ответить)",nil,true},
   {"enable_turn_on_auto_dnd_on_zone_change_after_whisper_sent","Снова включать |cffff0000DND|r при смене зоны если тот был |cffff0000ВЫКЛЮЧЕН|r при отправке сообщения кому-либо в пм(опцией выше), и до этого DND был |cff00ff00ВКЛЮЧЕН|r",nil,true},
@@ -261,7 +268,7 @@ function cfgFrame:ADDON_LOADED(addon)
     cfgFrame:InitConfig()
     cfgFrame:UpdateVisual()
     cfgFrame:CreateOptions()
-    _print("Аддон загружен. Настройки:|r "..ChatLink("Линк","Settings")..", либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
+    _print("Аддон загружен. Настройки:|r "..f:ChatLink("Линк","Settings")..", либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
   end
 end
 
@@ -594,7 +601,7 @@ function f:onFirstLaunch()
   CreateFrame("frame"):SetScript("OnUpdate", function(self)
     if t < GetTime() then
       RaidNotice_AddMessage(RaidWarningFrame, "|cff33ccff["..ADDON_NAME.."]:|r |cffffffff"..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации, либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r", ChatTypeInfo["RAID_WARNING"])
-      _print("|cff33ccff["..ADDON_NAME.."]:|r "..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации, либо "..ChatLink("Тык","Settings")..", либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
+      _print("|cff33ccff["..ADDON_NAME.."]:|r "..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации, либо "..f:ChatLink("Тык","Settings")..", либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
       --if RaidWarningFrame:IsShown() then
       --  PlaySound("RaidWarning")
       --end
