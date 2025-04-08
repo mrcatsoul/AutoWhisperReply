@@ -1,32 +1,42 @@
 local ADDON_NAME = ...
 
-local STRING_SCHOOL_UNKNOWN = STRING_SCHOOL_UNKNOWN
-
-local LOCALE = GetLocale()
-local ADDON_NAME_LOCALE_SHORT = LOCALE=="ruRU" and GetAddOnMetadata(ADDON_NAME,"TitleS-ruRU") or GetAddOnMetadata(ADDON_NAME,"TitleS") or ADDON_NAME
-local ADDON_NAME_LOCALE = LOCALE=="ruRU" and GetAddOnMetadata(ADDON_NAME,"Title-ruRU") or GetAddOnMetadata(ADDON_NAME,"Title") or ADDON_NAME
-local ADDON_NOTES = LOCALE=="ruRU" and GetAddOnMetadata(ADDON_NAME,"Notes-ruRU") or GetAddOnMetadata(ADDON_NAME,"Notes") or STRING_SCHOOL_UNKNOWN
-local ADDON_VERSION = GetAddOnMetadata(ADDON_NAME,"Version") or STRING_SCHOOL_UNKNOWN
-
-local slashCmd = "/awr"
-
-local cfg, friendsNames, messageCD, recentlySendPMNames, guildMembersNames, notifiedMsgs = {}, {}, {}, {}, {}, {}
-local playerName = UnitName("player")
-
+local UNKNOWN = UNKNOWN
+local _G = _G
 local print = print
+local select = select
 local wipe = table.wipe
 local GetNumFriends = GetNumFriends
 local SendChatMessage = SendChatMessage
 local UnitIsDND = UnitIsDND
+local UnitIsAFK = UnitIsAFK
 local GetGuildRosterInfo = GetGuildRosterInfo
 local GetFriendInfo = GetFriendInfo
+local UnitName = UnitName
 local GetNumGuildMembers = GetNumGuildMembers
 local GetTime = GetTime
 local ShowFriends = ShowFriends
 local GetPlayerInfoByGUID = GetPlayerInfoByGUID
+local RAID_CLASS_COLORS = RAID_CLASS_COLORS
+local MARKED_DND = MARKED_DND
+local MARKED_AFK_MESSAGE = MARKED_AFK_MESSAGE
+local CLEARED_DND = CLEARED_DND
+local CLEARED_AFK = CLEARED_AFK
 
-local function _print(msg,msg2,msg3,frame)
-  if not cfg.enable_chat_print then return end
+local LOCALE = GetLocale()
+local ADDON_NAME_LOCALE_SHORT = LOCALE=="ruRU" and GetAddOnMetadata(ADDON_NAME,"TitleS-ruRU") or GetAddOnMetadata(ADDON_NAME,"TitleS") or ADDON_NAME
+local ADDON_NAME_LOCALE = LOCALE=="ruRU" and GetAddOnMetadata(ADDON_NAME,"Title-ruRU") or GetAddOnMetadata(ADDON_NAME,"Title") or ADDON_NAME
+local ADDON_NOTES = LOCALE=="ruRU" and GetAddOnMetadata(ADDON_NAME,"Notes-ruRU") or GetAddOnMetadata(ADDON_NAME,"Notes") or UNKNOWN
+local ADDON_VERSION = GetAddOnMetadata(ADDON_NAME,"Version") or UNKNOWN
+
+local playerName = UnitName("player")
+local slashCmd = "/awr"
+local cfg, friendsNames, messageCD, recentlySendPMNames, guildMembersNames, notifiedMsgs = {}, {}, {}, {}, {}, {}
+local oldAutoReplyMsg = ""
+local SendChatMessageTainted
+local dndOrAfkRequestProcessed, dndChatFaked = true
+
+local function _print(msg,msg2,msg3,frame,force)
+  if not cfg.enable_chat_print and not force then return end
   if frame then
     frame:AddMessage("|cff3399ff["..ADDON_NAME_LOCALE_SHORT.."]|r: "..msg, msg2 and msg2 or "", msg3 and msg3 or "")
   else
@@ -34,21 +44,88 @@ local function _print(msg,msg2,msg3,frame)
   end
 end
 
+local DelayedCall
+do
+  local DelayedCallFrame = CreateFrame("Frame")  -- Создаем один фрейм для всех отложенных вызовов
+  DelayedCallFrame:Hide()  -- Изначально скрываем фрейм
+  
+  local calls = {}  -- Таблица для хранения отложенных вызовов
+  
+  local function OnUpdate(self, elapsed)
+    for i, call in ipairs(calls) do
+      call.time = call.time + elapsed
+      if call.time >= call.delay then
+        call.func()
+        table.remove(calls, i)  -- Удаляем вызов из списка
+      end
+    end
+  end
+  
+  DelayedCallFrame:SetScript("OnUpdate", OnUpdate)
+  
+  -- Основная функция для отложенных вызовов
+  function DelayedCall(delay, func)
+    table.insert(calls, { delay = delay, time = 0, func = func })
+    if not DelayedCallFrame:IsShown() then
+      DelayedCallFrame:Show()  -- Показываем фрейм, если еще не показан
+    end
+  end
+end
+
+local function TurnOnDNDIfNecessary(event)
+  if cfg.enable_addon and dndOrAfkRequestProcessed and not UnitIsDND("player") then
+    if cfg.enable_auto_dnd_force and not UnitIsAFK("player") then
+      if not cfg.disable_dnd_before_sendchatmessage_and_turn_on_again then
+        dndOrAfkRequestProcessed = nil
+      end
+      SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName), "DND")
+      _print("force DND")
+    elseif (event or dndChatFaked) and cfg.enable_auto_dnd and (cfg.enable_turn_on_auto_dnd_on_zone_change_after_whisper_sent or not cfg.auto_disable_dnd_on_whisper_sent) then
+      if not cfg.disable_dnd_before_sendchatmessage_and_turn_on_again then
+        dndOrAfkRequestProcessed = nil
+      end
+      dndChatFaked = nil
+      SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName), "DND")
+      _print("Режим авто-|cffff0000DND|r включен, автоответ для фанатов: \""..cfg.auto_reply_message:gsub("#playerName",playerName).."\"",event,dndChatFaked)
+    end
+  end
+end
+
 local f = CreateFrame("frame")
 f:RegisterEvent("CHAT_MSG_WHISPER")
 f:RegisterEvent("CHAT_MSG_WHISPER_INFORM")
+f:RegisterEvent("CHAT_MSG_SYSTEM")
 f:RegisterEvent("FRIENDLIST_UPDATE")
 f:RegisterEvent("GUILD_ROSTER_UPDATE")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
 f:SetScript("OnEvent", function(self, event, ...) self[event](self, ...) end)
 
+f:SetScript("OnUpdate", function(self, elapsed)
+  self.t = self.t and self.t + elapsed or 0
+  if self.t < 0.1 then return end
+  self.t = 0
+  TurnOnDNDIfNecessary()
+end)
+  
+function f:CHAT_MSG_SYSTEM(msg)
+  if msg:match(MARKED_DND:gsub("%%s", "(.+)")) or msg==CLEARED_DND or msg==CLEARED_AFK or msg:match(MARKED_AFK_MESSAGE:gsub("%%s", "(.+)")) then
+    --lagTime = GetTime() - msgLastSentTime
+    --print("lagTime:",lagTime,msgLastSentTime)
+    dndOrAfkRequestProcessed = true
+  end
+  if msg==CLEARED_AFK then
+    --print("jghjghjghj")
+    DelayedCall(0.5, function() TurnOnDNDIfNecessary(true) end)
+  end
+end
+
 function f:CHAT_MSG_WHISPER(...)
   local msg, name = ...
-  if not cfg.enable_addon or not cfg.enable_auto_reply or not name or name == "" or name == STRING_SCHOOL_UNKNOWN or name == playerName then return end
+  if not cfg.enable_addon or not cfg.enable_auto_reply or not name or name == "" or name == UNKNOWN or name == playerName then return end
   local noReply = (cfg.enable_accept_pm_from_friends_only and friendsNames[name]) 
-                  or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name])
-                  or (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name])
-                  or not (cfg.enable_accept_pm_from_friends_only or cfg.enable_accept_pm_from_guild_members or cfg.enable_accept_pm_we_recently_whisper_send)
+    or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name])
+    or (cfg.enable_accept_pm_we_recently_whisper_send and recentlySendPMNames[name])
+    or not (cfg.enable_accept_pm_from_friends_only or cfg.enable_accept_pm_from_guild_members or cfg.enable_accept_pm_we_recently_whisper_send)
   local shouldReply = not noReply
   --print("shouldReply",shouldReply)
   if shouldReply then
@@ -66,12 +143,12 @@ end
 
 function f:CHAT_MSG_WHISPER_INFORM(...)
   local msg, name = ...
-  if not cfg.enable_addon or not name or name == "" or name == STRING_SCHOOL_UNKNOWN or msg == cfg.auto_reply_message:gsub("#playerName",playerName) then return end
+  if not cfg.enable_addon or not name or name == "" or name == UNKNOWN or name == playerName or msg == cfg.auto_reply_message:gsub("#playerName",playerName) then return end
   if cfg.enable_accept_pm_we_recently_whisper_send and not recentlySendPMNames[name] and not ( (cfg.enable_accept_pm_from_friends_only and friendsNames[name]) or (cfg.enable_accept_pm_from_guild_members and guildMembersNames[name]) ) then
     _print(name, "временно добавлен в белый список для общения")
     recentlySendPMNames[name] = true
   end
-  if cfg.auto_disable_dnd_on_whisper_sent and UnitIsDND("player") then
+  if not cfg.enable_auto_dnd_force and cfg.auto_disable_dnd_on_whisper_sent and UnitIsDND("player") then
     if not cfg.enable_turn_on_auto_dnd_on_zone_change_after_whisper_sent then
       cfg.enable_auto_dnd = false
     end
@@ -80,14 +157,10 @@ function f:CHAT_MSG_WHISPER_INFORM(...)
 end
 
 function f:PLAYER_ENTERING_WORLD(...)
-  f:onFirstLaunch()
+  f:OnFirstLaunch()
   playerName = UnitName("player")
   ShowFriends()
-  if not cfg.enable_addon then return end
-  if cfg.enable_auto_dnd and not UnitIsDND("player") and (cfg.enable_turn_on_auto_dnd_on_zone_change_after_whisper_sent or not cfg.auto_disable_dnd_on_whisper_sent) then
-    SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName), "DND")
-    _print("Режим авто-|cffff0000DND|r включен, автоответ для фанатов: "..cfg.auto_reply_message:gsub("#playerName",playerName).."")
-  end
+  TurnOnDNDIfNecessary(true)
 end
 
 function f:GUILD_ROSTER_UPDATE()
@@ -95,7 +168,7 @@ function f:GUILD_ROSTER_UPDATE()
   wipe(guildMembersNames)
   for i=1,GetNumGuildMembers() do
     local name = GetGuildRosterInfo(i)
-    if name and name~="" and name~=STRING_SCHOOL_UNKNOWN then 
+    if name and name~="" and name~=UNKNOWN then 
       guildMembersNames[name] = true
     end
   end
@@ -106,7 +179,7 @@ function f:FRIENDLIST_UPDATE()
   wipe(friendsNames)
   for i=1,GetNumFriends() do
     local name = GetFriendInfo(i)
-    if name and name~="" and name~=STRING_SCHOOL_UNKNOWN then 
+    if name and name~="" and name~=UNKNOWN then 
       friendsNames[name] = true
       --print(name)
     end
@@ -116,8 +189,6 @@ end
 local function rgbToHex(r, g, b)
   return string.format("%02x%02x%02x", math.floor(255 * r), math.floor(255 * g), math.floor(255 * b))
 end
-
-local RAID_CLASS_COLORS = RAID_CLASS_COLORS
 
 local function PlayerWhisperHyperLink(name,guid,class,addBrackets)
   local link, colorStr 
@@ -135,23 +206,23 @@ local function PlayerWhisperHyperLink(name,guid,class,addBrackets)
       link = "|Hplayer:"..name..":WHISPER:"..string.upper(name).."|h|cff"..colorStr..""..name.."|r|h"
     end
   else
-    link = addBrackets and "|cff999999["..STRING_SCHOOL_UNKNOWN:upper().."]|r" or "|cff999999"..STRING_SCHOOL_UNKNOWN:upper().."|r"
+    link = addBrackets and "|cff999999["..UNKNOWN:upper().."]|r" or "|cff999999"..UNKNOWN:upper().."|r"
   end
   
   return link
 end
 
---local MARKED_DND = MARKED_DND
-
 local function chatFilter(self, event, msg, name, ...)
   --print((cfg.enable_accept_pm_from_friends_only and friendsNames[name]))
   if not (msg and name) then return end
-  
+  -- if event=="CHAT_MSG_SYSTEM" and msg:find(cfg.auto_reply_message:gsub("#playerName",playerName)) then
+    -- print("test +")
+  -- end
   -- отобразить сообщение в чате если оно подходит по следующим критериям: ...
   local isGoodMsg = not cfg.enable_addon -- если аддон выключен;
   
   -- если это не системное (желтое) сообщение оповещающее нас о статусе включённого режима не беспокоить;
-  or (event=="CHAT_MSG_SYSTEM" --[[and cfg.enable_auto_dnd]] and not msg:find(cfg.auto_reply_message:gsub("#playerName",playerName)) --[[not msg:match(MARKED_DND:gsub("%%s", "(.+)"))]]) 
+  or (event=="CHAT_MSG_SYSTEM" --[[and cfg.enable_auto_dnd]] and not msg:find(cfg.auto_reply_message:gsub("#playerName",playerName)) --[[not msg:match(MARKED_DND:gsub("%%s", "(.+)"))]] and not (msg==CLEARED_DND and cfg.disable_dnd_before_sendchatmessage_and_turn_on_again)) 
   
   -- если это исходящее пм сообщение, идентичное введенному в опции-строке "сообщение автоответ" + опция "скрывать автоответ" включена, либо это обычное исходящее сообщение
   or (event=="CHAT_MSG_WHISPER_INFORM" and ((msg ~= ((cfg.auto_reply_message):gsub("#playerName",playerName)) and cfg.enable_hide_auto_reply) or not cfg.enable_hide_auto_reply))
@@ -172,7 +243,7 @@ local function chatFilter(self, event, msg, name, ...)
       --print(GetPlayerInfoByGUID(senderGuid))
       if not notifiedMsgs[msgId] then
         notifiedMsgs[msgId] = true
-        _print("Сообщение в пм от "..PlayerWhisperHyperLink(name,senderGuid,nil,true).." было |cffff0000заблокировано|r. |r"..f:ChatLink("Настройки","Settings").."")
+        _print("Сообщение в пм от "..PlayerWhisperHyperLink(name,senderGuid,nil,true).." было |cffff0000заблокировано|r. |r"..f:ChatLink("Настройки","Settings").."",nil,nil,nil,true)
       end
     end
     --if event=="CHAT_MSG_WHISPER" then
@@ -230,9 +301,11 @@ local options =
   {"enable_hide_auto_reply","Скрывать из чата наш автоответ в пм другим",nil,true},
   {"enable_hide_blocked_messages","Скрывать из чата заблокированные входящие пм",nil,true},
   {"enable_blocked_msg_notification","Отображать уведомления о заблокированных пм",nil,true},
-  {"enable_auto_dnd","Держать режим |cffff0000DND(не беспокоить)|r включенным всегда",nil,false},
-  {"auto_disable_dnd_on_whisper_sent","Выключать режим |cffff0000DND|r если отправляем сообщение кому-то в пм (чтобы нам могли ответить)",nil,true},
+  {"enable_auto_dnd","Держать режим |cffff0000DND (не беспокоить)|r включенным всегда",nil,false},
+  {"auto_disable_dnd_on_whisper_sent","Выключать |cffff0000DND|r если отправляем сообщение кому-то в пм (чтобы нам могли ответить)",nil,true},
   {"enable_turn_on_auto_dnd_on_zone_change_after_whisper_sent","Снова включать |cffff0000DND|r при смене зоны если тот был |cffff0000ВЫКЛЮЧЕН|r при отправке сообщения кому-либо в пм(опцией выше), и до этого DND был |cff00ff00ВКЛЮЧЕН|r",nil,true},
+  {"enable_auto_dnd_force","|cffff0000Никогда не снимать DND|r (опция игнорирует все опции выше и вам никто не сможет написать в пм)",nil,false},
+  {"disable_dnd_before_sendchatmessage_and_turn_on_again","|cffff8811Тест: при включенном DND фейкать его в чате. При отправке сообщения на долю секунды снимать режим |cffff0000DND|r для того чтобы "..CHAT_FLAG_DND.." не отображалось в чате, и после этого моментально включать обратно|r",nil,false},
   {"enable_chat_print","Инфо сообщения от аддона в чат (принты/лог работы)",nil,true},
 }
 
@@ -266,9 +339,9 @@ cfgFrame:SetScript("OnEvent", function(self, event, ...) self[event](self, ...) 
 function cfgFrame:ADDON_LOADED(addon)
   if addon==ADDON_NAME then
     cfgFrame:InitConfig()
+    _print("Аддон загружен. Настройки:|r "..f:ChatLink("Линк","Settings")..", либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
     cfgFrame:UpdateVisual()
     cfgFrame:CreateOptions()
-    _print("Аддон загружен. Настройки:|r "..f:ChatLink("Линк","Settings")..", либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
   end
 end
 
@@ -337,14 +410,27 @@ end
 
 function cfgFrame:UpdateVisual()
   if not cfg.enable_addon or not cfg.enable_auto_dnd then
-    if UnitIsDND("player") then
+    if UnitIsDND("player") and not cfg.enable_auto_dnd_force then
       SendChatMessage("", "DND")
     end
-  elseif cfg.enable_auto_dnd then
-    if not UnitIsDND("player") then
-      SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName), "DND")
+  elseif ((cfg.enable_auto_dnd or cfg.enable_auto_dnd_force) and not UnitIsDND("player")) or oldAutoReplyMsg ~= cfg.auto_reply_message then
+    oldAutoReplyMsg = cfg.auto_reply_message
+    SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName), "DND")
+  end
+
+  if not SendChatMessageTainted and cfg.disable_dnd_before_sendchatmessage_and_turn_on_again then
+    SendChatMessageTainted = true
+    _G["SendChatMessage"] = function(msg,chatType,language,channel)
+      if dndOrAfkRequestProcessed and cfg.disable_dnd_before_sendchatmessage_and_turn_on_again and UnitIsDND("player") and not (chatType=="DND" or chatType=="AFK") then
+        dndOrAfkRequestProcessed = nil
+        dndChatFaked = true
+        _print("попыткаснятьднд")
+        SendChatMessage("","DND")
+      end
+      SendChatMessage(msg,chatType,language,channel)
     end
   end
+
   cfgFrame:Hide()
   -- cfgScrollFrame:Hide()
   cfgFrame:Show()
@@ -594,21 +680,16 @@ function cfgFrame:createEditBox(settingName,checkboxText,tooltipText,defValue,mi
   end
 end
 
-function f:onFirstLaunch()
+function f:OnFirstLaunch()
   if not cfgFrame.isFirstLaunch then return end
   cfgFrame.isFirstLaunch = nil
-  local t = GetTime()+4
-  CreateFrame("frame"):SetScript("OnUpdate", function(self)
-    if t < GetTime() then
-      RaidNotice_AddMessage(RaidWarningFrame, "|cff33ccff["..ADDON_NAME.."]:|r |cffffffff"..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации, либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r", ChatTypeInfo["RAID_WARNING"])
-      _print("|cff33ccff["..ADDON_NAME.."]:|r "..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации, либо "..f:ChatLink("Тык","Settings")..", либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
-      --if RaidWarningFrame:IsShown() then
-      --  PlaySound("RaidWarning")
-      --end
-      PlaySoundFile("interface\\addons\\"..ADDON_NAME.."\\swagga.mp3")
-      self:SetScript("OnUpdate", nil)
-      self=nil
-    end
+  DelayedCall(4, function() 
+    RaidNotice_AddMessage(RaidWarningFrame, "|cff33ccff["..ADDON_NAME.."]:|r |cffffffff"..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации, либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r", ChatTypeInfo["RAID_WARNING"])
+    _print("|cff33ccff["..ADDON_NAME.."]:|r "..ADDON_NOTES.."\nНастройки: Главное меню>Интерфейс>Модификации, либо "..f:ChatLink("Тык","Settings")..", либо |cff3377ff"..slashCmd.."|r в чат, изменить автоответ: |cff3377ff"..slashCmd.." сообщение|r")
+    --if RaidWarningFrame:IsShown() then
+    --  PlaySound("RaidWarning")
+    --end
+    PlaySoundFile("interface\\addons\\"..ADDON_NAME.."\\swagga.mp3")
   end)
 end
 
@@ -616,8 +697,10 @@ SlashCmdList[ADDON_NAME] = function(msg)
   if msg and msg~="" and msg~=cfg.auto_reply_message then
     cfg.auto_reply_message = msg
     --_print("auto_reply_message:", cfg.auto_reply_message)
-    SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName), "DND")
-    _print("Режим авто-|cffff0000DND|r включен, автоответ для фанатов: "..cfg.auto_reply_message:gsub("#playerName",playerName).."")
+    _print("Автоответ обновлён: \""..cfg.auto_reply_message:gsub("#playerName",playerName).."\"",nil,nil,nil,true)
+    if UnitIsDND("player") then
+      SendChatMessage(cfg.auto_reply_message:gsub("#playerName",playerName), "DND")
+    end
   else
     InterfaceOptionsFrame_OpenToCategory(f.cfgScrollFrame)
     if not f.cfgFrame:IsShown() then
