@@ -4,5 +4,4 @@ WoW 3.3.5 аддон. Чат-фильтр для отображения вход
 
 ![image](https://github.com/user-attachments/assets/85bf3ad1-bcfc-4955-bfb7-e74f4fd67f73)
 
-![image](https://github.com/user-attachments/assets/a8168d91-cefd-4629-a3ff-156a46495b73)
-
+![image](https://github.com/user-attachments/assets/b5873de4-d53a-4263-b528-913563916fb6)
